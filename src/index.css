@@ -1,0 +1,203 @@
+@import "tailwindcss";
+
+/* =========================================================
+   MEDICAL STORE APP
+   Clean White + Blue Theme
+   ========================================================= */
+
+/* ---------- Page Background ---------- */
+
+body {
+  margin: 0;
+  min-width: 320px;
+  background: #f8fbff;
+  color: #0f172a;
+  font-family:
+    Inter,
+    ui-sans-serif,
+    system-ui,
+    -apple-system,
+    BlinkMacSystemFont,
+    "Segoe UI",
+    sans-serif;
+}
+
+/* ---------- Slate → Blue Theme Overrides ---------- */
+
+/* Backgrounds */
+
+.bg-slate-50 {
+  background-color: #f8fbff !important;
+}
+
+.bg-slate-100 {
+  background-color: #eff6ff !important;
+}
+
+.bg-slate-200 {
+  background-color: #dbeafe !important;
+}
+
+/* Text */
+
+.text-slate-900 {
+  color: #0f172a !important;
+}
+
+.text-slate-800 {
+  color: #1e3a8a !important;
+}
+
+.text-slate-700 {
+  color: #1d4ed8 !important;
+}
+
+.text-slate-600 {
+  color: #2563eb !important;
+}
+
+.text-slate-500 {
+  color: #64748b !important;
+}
+
+/* Borders */
+
+.border-slate-200 {
+  border-color: #dbeafe !important;
+}
+
+.border-slate-300 {
+  border-color: #bfdbfe !important;
+}
+
+/* Dividers */
+
+.divide-slate-100 > :not([hidden]) ~ :not([hidden]) {
+  border-color: #eff6ff !important;
+}
+
+/* ---------- Blue Hover States ---------- */
+
+.hover\:bg-slate-50:hover {
+  background-color: #eff6ff !important;
+}
+
+.hover\:bg-slate-100:hover {
+  background-color: #dbeafe !important;
+}
+
+.hover\:bg-slate-800:hover {
+  background-color: #1d4ed8 !important;
+}
+
+/* ---------- Focus ---------- */
+
+.focus\:ring-slate-400:focus {
+  --tw-ring-color: #60a5fa !important;
+}
+
+/* =========================================================
+   BLUE PRIMARY BUTTONS
+   ========================================================= */
+
+.bg-slate-900 {
+  background-color: #2563eb !important;
+}
+
+.hover\:bg-slate-800:hover {
+  background-color: #1d4ed8 !important;
+}
+
+/* =========================================================
+   APP CARDS
+   ========================================================= */
+
+.bg-white {
+  background-color: #ffffff;
+}
+
+/* Give major cards a softer blue border */
+
+.rounded-2xl.border {
+  border-color: #dbeafe;
+}
+
+/* =========================================================
+   INPUTS
+   ========================================================= */
+
+input,
+select,
+textarea {
+  transition:
+    border-color 0.2s ease,
+    box-shadow 0.2s ease,
+    background-color 0.2s ease;
+}
+
+input:focus,
+select:focus,
+textarea:focus {
+  border-color: #60a5fa;
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.12);
+}
+
+/* =========================================================
+   BUTTON POLISH
+   ========================================================= */
+
+button {
+  transition:
+    background-color 0.2s ease,
+    border-color 0.2s ease,
+    color 0.2s ease,
+    transform 0.15s ease,
+    box-shadow 0.2s ease;
+}
+
+button:active {
+  transform: scale(0.98);
+}
+
+/* =========================================================
+   TABLE
+   ========================================================= */
+
+thead.bg-slate-50 {
+  background-color: #eff6ff !important;
+}
+
+tbody tr {
+  transition: background-color 0.15s ease;
+}
+
+/* =========================================================
+   SCROLLBAR
+   ========================================================= */
+
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: #f8fbff;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #bfdbfe;
+  border-radius: 999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #93c5fd;
+}
+
+/* =========================================================
+   SELECTION
+   ========================================================= */
+
+::selection {
+  background: #bfdbfe;
+  color: #1e3a8a;
+}
