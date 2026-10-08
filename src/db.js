@@ -639,6 +639,38 @@ export async function saveTransaction(transactionData) {
     })
 }
 
+/* --------------------------------
+   Delete Transaction
+-------------------------------- */
+export async function deleteTransaction(
+    transactionId
+) {
+    const db = await openDB()
+
+    return new Promise((resolve, reject) => {
+        const transaction = db.transaction(
+            STORES.TRANSACTIONS,
+            'readwrite'
+        )
+
+        const store = transaction.objectStore(
+            STORES.TRANSACTIONS
+        )
+
+        store.delete(transactionId)
+
+        transaction.oncomplete = () => {
+            db.close()
+            resolve()
+        }
+
+        transaction.onerror = () => {
+            db.close()
+            reject(transaction.error)
+        }
+    })
+}
+
 export async function getTransactionsBySession(sessionId) {
     const db = await openDB()
 
@@ -974,6 +1006,261 @@ export async function generateCustomerId() {
         transaction.onerror = () => {
             db.close()
             reject(transaction.error)
+        }
+    })
+}
+
+/* =========================================================
+   RESEQUENCE CUSTOMER IDS AFTER SALE DELETE
+========================================================= */
+
+export async function resequenceCustomerIds() {
+    const db = await openDB()
+
+    return new Promise((resolve, reject) => {
+        const transaction = db.transaction(
+            STORES.TRANSACTIONS,
+            'readwrite'
+        )
+
+        const store = transaction.objectStore(
+            STORES.TRANSACTIONS
+        )
+
+        const request = store.getAll()
+
+        request.onsuccess = () => {
+            const allTransactions =
+                request.result || []
+
+            /*
+              Only sales with Customer IDs are considered.
+              Each month has its own independent sequence.
+            */
+            const monthlySales = {}
+
+            allTransactions
+                .filter(
+                    (transaction) =>
+                        transaction.type === 'sale' &&
+                        transaction.customerRef
+                )
+                .forEach((sale) => {
+                    const saleDate =
+                        sale.date ||
+                        sale.time ||
+                        ''
+
+                    const month =
+                        String(saleDate).slice(0, 7)
+
+                    if (!monthlySales[month]) {
+                        monthlySales[month] = []
+                    }
+
+                    monthlySales[month].push(sale)
+                })
+
+            /*
+              Keep the original sale order.
+              The earliest sale in each month gets
+              CUST-001, next gets CUST-002, etc.
+            */
+            const saleCustomerIdMap = new Map()
+            const monthlyCounters = {}
+
+            Object.keys(monthlySales).forEach(
+                (month) => {
+                    const salesForMonth =
+                        monthlySales[month].sort(
+                            (a, b) => {
+                                const timeA =
+                                    new Date(
+                                        a.time || 0
+                                    ).getTime()
+
+                                const timeB =
+                                    new Date(
+                                        b.time || 0
+                                    ).getTime()
+
+                                if (
+                                    timeA !==
+                                    timeB
+                                ) {
+                                    return (
+                                        timeA -
+                                        timeB
+                                    )
+                                }
+
+                                return String(
+                                    a.id
+                                ).localeCompare(
+                                    String(b.id)
+                                )
+                            }
+                        )
+
+                    monthlyCounters[month] =
+                        salesForMonth.length
+
+                    salesForMonth.forEach(
+                        (sale, index) => {
+                            const newCustomerRef =
+                                `CUST-${String(
+                                    index + 1
+                                ).padStart(3, '0')}`
+
+                            saleCustomerIdMap.set(
+                                sale.id,
+                                newCustomerRef
+                            )
+
+                            /*
+                              Only update the record if
+                              its Customer ID actually changed.
+                            */
+                            if (
+                                sale.customerRef !==
+                                newCustomerRef
+                            ) {
+                                store.put({
+                                    ...sale,
+                                    customerRef:
+                                        newCustomerRef,
+                                })
+                            }
+                        }
+                    )
+                }
+            )
+
+            /*
+              Update refund Customer IDs so they remain
+              linked to their original sale.
+            */
+            allTransactions
+                .filter(
+                    (transaction) =>
+                        transaction.type ===
+                        'refund' &&
+                        transaction.originalSaleId
+                )
+                .forEach((refund) => {
+                    const newCustomerRef =
+                        saleCustomerIdMap.get(
+                            refund.originalSaleId
+                        )
+
+                    if (
+                        newCustomerRef &&
+                        refund.customerRef !==
+                        newCustomerRef
+                    ) {
+                        store.put({
+                            ...refund,
+                            customerRef:
+                                newCustomerRef,
+                        })
+                    }
+                })
+
+            transaction.oncomplete =
+                async () => {
+                    try {
+                        db.close()
+
+                        /*
+                          Update the Customer ID counter
+                          for the current month only.
+                        */
+                        const appDb =
+                            await openDB()
+
+                        await new Promise(
+                            (
+                                resolveState,
+                                rejectState
+                            ) => {
+                                const stateTransaction =
+                                    appDb.transaction(
+                                        STORES.APP_STATE,
+                                        'readwrite'
+                                    )
+
+                                const stateStore =
+                                    stateTransaction.objectStore(
+                                        STORES.APP_STATE
+                                    )
+
+                                const currentMonth =
+                                    new Date()
+                                        .toISOString()
+                                        .slice(
+                                            0,
+                                            7
+                                        )
+
+                                const currentMonthCount =
+                                    monthlyCounters[
+                                    currentMonth
+                                    ] || 0
+
+                                stateStore.put({
+                                    key:
+                                        'customerIdCounter',
+                                    month:
+                                        currentMonth,
+                                    count:
+                                        currentMonthCount,
+                                })
+
+                                stateTransaction.oncomplete =
+                                    () => {
+                                        appDb.close()
+                                        resolveState()
+                                    }
+
+                                stateTransaction.onerror =
+                                    () => {
+                                        appDb.close()
+                                        rejectState(
+                                            stateTransaction.error
+                                        )
+                                    }
+                            }
+                        )
+
+                        resolve({
+                            success: true,
+                            monthlyCounters,
+                        })
+                    } catch (error) {
+                        reject(error)
+                    }
+                }
+
+            request.onerror = () => {
+                db.close()
+                reject(request.error)
+            }
+
+            transaction.onerror = () => {
+                db.close()
+                reject(transaction.error)
+            }
+
+            transaction.onabort = () => {
+                db.close()
+
+                reject(
+                    transaction.error ||
+                    new Error(
+                        'Customer ID resequencing failed.'
+                    )
+                )
+            }
         }
     })
 }

@@ -10,6 +10,7 @@ import {
   getCurrentSession,
   clearCurrentSession,
   saveTransaction,
+  deleteTransaction,
   getTransactionsBySession,
   saveDailySession,
   getDailySessions,
@@ -21,6 +22,7 @@ import {
   addAuditLog,
   getAuditLogs,
   generateCustomerId,
+  resequenceCustomerIds,
   hasRegisteredUsers,
   createUser,
   getUsers,
@@ -341,6 +343,13 @@ export default function App() {
       dispensing: '',
     })
 
+  const [categorySaleNotes, setCategorySaleNotes] =
+    useState({
+      medicine: '',
+      general: '',
+      dispensing: '',
+    })
+
   const [showRefundModal, setShowRefundModal] = useState(false)
 
   const [refundForm, setRefundForm] = useState({
@@ -381,7 +390,28 @@ export default function App() {
   const [currentView, setCurrentView] = useState('dashboard')
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
   const [auditLogs, setAuditLogs] = useState([])
+
   const [transactionPage, setTransactionPage] = useState(1)
+  const [expandedTransactionId, setExpandedTransactionId] =
+    useState(null)
+
+  const [transactionActionId, setTransactionActionId] =
+    useState(null)
+
+  const [editSaleTransaction, setEditSaleTransaction] =
+    useState(null)
+
+  const [editSaleForm, setEditSaleForm] = useState({
+    category: 'medicine',
+    amount: '',
+    reason: '',
+  })
+
+  const [deleteSaleTransaction, setDeleteSaleTransaction] =
+    useState(null)
+
+
+
 
   /* --------------------------------
    Refund Modal Reset
@@ -797,7 +827,7 @@ export default function App() {
         type: 'sale',
         category: category,
         amount,
-        reason: '',
+        reason: categorySaleNotes[category] || '',
         time: getCurrentTime(),
         date: getCurrentDate(),
 
@@ -840,10 +870,300 @@ export default function App() {
         ...previous,
         [category]: '',
       }))
+
+      setCategorySaleNotes((previous) => ({
+        ...previous,
+        [category]: '',
+      }))
     } catch (error) {
       console.error(error)
 
       showNotification('error', 'Sale could not be saved.')
+    }
+  }
+
+  /* --------------------------------
+     Edit Sale
+  -------------------------------- */
+  async function handleEditSale() {
+    if (!editSaleTransaction) {
+      return
+    }
+
+    if (!isDayOpen || isDayClosed) {
+      showNotification(
+        'error',
+        'Sale cannot be edited after the day is closed.'
+      )
+      return
+    }
+
+    const amount = Number(editSaleForm.amount)
+
+    if (
+      !editSaleForm.amount ||
+      !Number.isFinite(amount) ||
+      amount <= 0
+    ) {
+      showNotification(
+        'error',
+        'Please enter a valid sale amount.'
+      )
+      return
+    }
+
+    if (
+      !['medicine', 'general', 'dispensing'].includes(
+        editSaleForm.category
+      )
+    ) {
+      showNotification(
+        'error',
+        'Please select a valid category.'
+      )
+      return
+    }
+
+    if (!currentUser) {
+      showNotification(
+        'error',
+        'Please login first.'
+      )
+      return
+    }
+
+    try {
+      const oldCategory =
+        editSaleTransaction.category
+
+      const oldAmount =
+        Number(editSaleTransaction.amount || 0)
+
+      const newCategory =
+        editSaleForm.category
+
+      const newAmount =
+        amount
+
+      const updatedTransaction = {
+        ...editSaleTransaction,
+        category: newCategory,
+        amount: newAmount,
+        reason: editSaleForm.reason.trim(),
+      }
+
+      /* Update transaction in IndexedDB */
+      await saveTransaction(
+        updatedTransaction
+      )
+
+      /* Recalculate category totals */
+      const updatedSales = {
+        ...sales,
+      }
+
+      if (oldCategory === newCategory) {
+        updatedSales[oldCategory] =
+          Math.max(
+            0,
+            Number(sales[oldCategory] || 0) -
+            oldAmount +
+            newAmount
+          )
+      } else {
+        updatedSales[oldCategory] =
+          Math.max(
+            0,
+            Number(sales[oldCategory] || 0) -
+            oldAmount
+          )
+
+        updatedSales[newCategory] =
+          Number(sales[newCategory] || 0) +
+          newAmount
+      }
+
+      /* Save updated session */
+      await persistCurrentSession(
+        updatedSales
+      )
+
+      /* Update React state */
+      setSales(updatedSales)
+
+      setTransactions((previous) =>
+        previous.map((transaction) =>
+          transaction.id ===
+            updatedTransaction.id
+            ? updatedTransaction
+            : transaction
+        )
+      )
+
+      /* Audit log */
+      await addAuditLog({
+        userId: currentUser.id,
+        username: currentUser.username,
+        action: 'EDIT_SALE',
+        description:
+          `Sale edited for ${editSaleTransaction.customerRef || 'No Customer ID'}: ` +
+          `${getCategoryName(oldCategory)} ${formatMoney(oldAmount)} → ` +
+          `${getCategoryName(newCategory)} ${formatMoney(newAmount)}.`,
+        sessionId:
+          editSaleTransaction.sessionId,
+        transactionId:
+          editSaleTransaction.id,
+      })
+
+      /* Close modal */
+      setEditSaleTransaction(null)
+
+      setEditSaleForm({
+        category: 'medicine',
+        amount: '',
+        reason: '',
+      })
+
+      showNotification(
+        'success',
+        'Sale updated successfully.'
+      )
+    } catch (error) {
+      console.error(
+        'Edit sale failed:',
+        error
+      )
+
+      showNotification(
+        'error',
+        'Sale could not be updated.'
+      )
+    }
+  }
+
+  /* --------------------------------
+     Delete Sale
+  -------------------------------- */
+  async function handleDeleteSale() {
+    if (!deleteSaleTransaction) {
+      return
+    }
+
+    if (!isDayOpen || isDayClosed) {
+      showNotification(
+        'error',
+        'Sale cannot be deleted after the day is closed.'
+      )
+      return
+    }
+
+    if (deleteSaleTransaction.type !== 'sale') {
+      showNotification(
+        'error',
+        'Only sales can be deleted.'
+      )
+      return
+    }
+
+    if (!currentUser) {
+      showNotification(
+        'error',
+        'Please login first.'
+      )
+      return
+    }
+
+    try {
+      const deletedCategory =
+        deleteSaleTransaction.category
+
+      const deletedAmount =
+        Number(deleteSaleTransaction.amount || 0)
+
+      /* Update category totals */
+      const updatedSales = {
+        ...sales,
+      }
+
+      updatedSales[deletedCategory] = Math.max(
+        0,
+        Number(updatedSales[deletedCategory] || 0) -
+        deletedAmount
+      )
+
+      /* Save updated session */
+      await persistCurrentSession(
+        updatedSales
+      )
+
+      /* Remove transaction from IndexedDB */
+      await deleteTransaction(
+        deleteSaleTransaction.id
+      )
+
+      /*
+        Re-sequence Customer IDs after deleting
+        the sale so that deleted numbers are reused.
+      */
+      await resequenceCustomerIds()
+
+      /* Update React state */
+      setSales(updatedSales)
+
+      /*
+        Reload transactions so React state receives
+        the newly resequenced Customer IDs.
+      */
+      const updatedTransactions =
+        await getTransactionsBySession(
+          deleteSaleTransaction.sessionId
+        )
+
+      setTransactions((previous) => {
+        const otherTransactions =
+          previous.filter(
+            (transaction) =>
+              transaction.sessionId !==
+              deleteSaleTransaction.sessionId
+          )
+
+        return [
+          ...otherTransactions,
+          ...updatedTransactions,
+        ]
+      })
+
+      /* Audit log */
+      await addAuditLog({
+        userId: currentUser.id,
+        username: currentUser.username,
+        action: 'DELETE_SALE',
+        description:
+          `Sale deleted for ${deleteSaleTransaction.customerRef || 'No Customer ID'}: ` +
+          `${getCategoryName(deletedCategory)} ${formatMoney(deletedAmount)}.`,
+        sessionId:
+          deleteSaleTransaction.sessionId,
+        transactionId:
+          deleteSaleTransaction.id,
+      })
+
+      /* Close confirmation modal */
+      setDeleteSaleTransaction(null)
+
+      showNotification(
+        'success',
+        'Sale deleted successfully and Customer IDs were resequenced.'
+      )
+    } catch (error) {
+      console.error(
+        'Delete sale failed:',
+        error
+      )
+
+      showNotification(
+        'error',
+        'Sale could not be deleted.'
+      )
     }
   }
 
@@ -960,6 +1280,13 @@ export default function App() {
       const matchingSales = allTransactions
         .filter((transaction) => {
           if (transaction.type !== 'sale') {
+            return false
+          }
+
+          if (
+            currentUser?.role !== 'admin' &&
+            transaction.userId !== currentUser?.id
+          ) {
             return false
           }
 
@@ -1094,6 +1421,13 @@ export default function App() {
         allTransactions.filter(
           (transaction) => {
             if (transaction.type !== 'sale') {
+              return false
+            }
+
+            if (
+              currentUser?.role !== 'admin' &&
+              transaction.userId !== currentUser?.id
+            ) {
               return false
             }
 
@@ -1846,6 +2180,7 @@ export default function App() {
         ) : currentView === 'recordDetails' && selectedRecord ? (
           <DailyRecordDetails
             record={selectedRecord}
+            currentUser={currentUser}
             onBack={() => {
               setSelectedRecord(null)
               setCurrentView('records')
@@ -1858,6 +2193,7 @@ export default function App() {
           >
             <DailyHistory
               records={dailyRecords}
+              currentUser={currentUser}
               onViewDetails={(record) => {
                 setSelectedRecord(record)
                 setCurrentView('recordDetails')
@@ -2124,6 +2460,7 @@ export default function App() {
         ) : currentView === 'recordDetails' && selectedRecord ? (
           <DailyRecordDetails
             record={selectedRecord}
+            currentUser={currentUser}
             onBack={() => {
               setSelectedRecord(null)
               setCurrentView('records')
@@ -2136,6 +2473,7 @@ export default function App() {
           >
             <DailyHistory
               records={dailyRecords}
+              currentUser={currentUser}
               onViewDetails={(record) => {
                 setSelectedRecord(record)
                 setCurrentView('recordDetails')
@@ -2890,6 +3228,7 @@ export default function App() {
       ) : currentView === 'recordDetails' && selectedRecord ? (
         <DailyRecordDetails
           record={selectedRecord}
+          currentUser={currentUser}
           onBack={() => {
             setSelectedRecord(null)
             setCurrentView('records')
@@ -2926,7 +3265,7 @@ export default function App() {
         </PageContainer>
       ) : (
         <>
-          <div className="mt-5 grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_360px] gap-5 items-start">
+          <div className="mt-5 grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_420px] gap-5 items-start">
             <div className="min-w-0 space-y-5">
 
               <div className="mb-3 flex justify-start">
@@ -3086,6 +3425,41 @@ export default function App() {
                             + Add
                           </button>
                         </div>
+                        {categorySaleAmounts[item.category] && (
+                          <div className="mt-2.5">
+                            <label
+                              htmlFor={`sale-note-${item.category}`}
+                              className="mb-1.5 block text-xs font-semibold text-slate-600"
+                            >
+                              Note / Medicine Name (Optional)
+                            </label>
+
+                            <textarea
+                              id={`sale-note-${item.category}`}
+                              rows="2"
+                              value={categorySaleNotes[item.category]}
+                              onChange={(e) =>
+                                setCategorySaleNotes((previous) => ({
+                                  ...previous,
+                                  [item.category]: e.target.value,
+                                }))
+                              }
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter') {
+                                  e.preventDefault()
+
+                                  handleAddSale(
+                                    item.category,
+                                    categorySaleAmounts[item.category]
+                                  )
+                                }
+                              }}
+                              placeholder="e.g. Panadol 500mg, Syrup, etc."
+                              disabled={!isDayOpen || isDayClosed}
+                              className="w-full resize-none rounded-lg border border-slate-200 bg-white px-2.5 py-2 text-sm text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-blue-500 focus:ring-2 focus:ring-blue-100 disabled:cursor-not-allowed disabled:bg-slate-50"
+                            />
+                          </div>
+                        )}
                       </div>
                     </SaleCategory>
                   ))}
@@ -3111,30 +3485,30 @@ export default function App() {
                     </button>
                   </div>
 
-                  <div className="mt-5 grid grid-cols-1 sm:grid-cols-3 gap-4">
-                    <div className="rounded-xl border border-slate-200/80 bg-slate-50 p-4">
-                      <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-500 sm:text-xs">
+                  <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-3">
+                    <div className="rounded-lg border border-slate-200/80 bg-slate-50 px-3 py-2.5">
+                      <p className="text-[10px] font-semibold uppercase tracking-[0.06em] text-slate-500">
                         Opening Cash
                       </p>
-                      <p className="mt-2 text-base font-bold tracking-tight text-slate-900 sm:text-lg">
+                      <p className="mt-1 text-sm font-bold tracking-tight text-slate-900 sm:text-base">
                         {formatMoney(openingCash)}
                       </p>
                     </div>
 
-                    <div className="rounded-xl border border-blue-100 bg-blue-50 p-4">
-                      <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-blue-600 sm:text-xs">
+                    <div className="rounded-lg border border-blue-100 bg-blue-50 px-3 py-2.5">
+                      <p className="text-[10px] font-semibold uppercase tracking-[0.06em] text-blue-600">
                         Net Sales
                       </p>
-                      <p className="mt-2 text-base font-bold tracking-tight text-blue-700 sm:text-lg">
+                      <p className="mt-1 text-sm font-bold tracking-tight text-blue-700 sm:text-base">
                         {formatMoney(netSales)}
                       </p>
                     </div>
 
-                    <div className="rounded-xl border border-emerald-100 bg-emerald-50 p-4">
-                      <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-emerald-600 sm:text-xs">
+                    <div className="rounded-lg border border-emerald-100 bg-emerald-50 px-3 py-2.5">
+                      <p className="text-[10px] font-semibold uppercase tracking-[0.06em] text-emerald-600">
                         Expected Closing Cash
                       </p>
-                      <p className="mt-2 text-base font-bold tracking-tight text-emerald-700 sm:text-lg">
+                      <p className="mt-1 text-sm font-bold tracking-tight text-emerald-700 sm:text-base">
                         {formatMoney(expectedClosingCash)}
                       </p>
                     </div>
@@ -3232,71 +3606,161 @@ export default function App() {
                           (transaction) => (
                             <div
                               key={transaction.id}
-                              className="flex items-start justify-between gap-3 px-5 py-4 transition hover:bg-slate-50"
+                              onClick={() => {
+                                setExpandedTransactionId((currentId) =>
+                                  currentId === transaction.id
+                                    ? null
+                                    : transaction.id
+                                )
+                              }}
+                              className="cursor-pointer px-3.5 py-2.5 transition hover:bg-slate-50"
                             >
-                              <div className="flex min-w-0 items-start gap-3">
-                                <div
-                                  className={`inline-flex items-center rounded-full border px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide ${transaction.type === 'sale'
-                                    ? 'border-blue-200 bg-blue-50 text-blue-700'
-                                    : 'border-red-200 bg-red-50 text-red-700'
-                                    }`}
-                                >
-                                  <CategoryIcon
-                                    category={transaction.category}
-                                    size={18}
-                                  />
-                                </div>
-
-                                <div className="min-w-0">
-                                  <div className="flex flex-wrap items-center gap-2">
-                                    <p className="truncate text-sm font-semibold text-slate-900">
-                                      {getCategoryName(
-                                        transaction.category
-                                      )}
-                                    </p>
-
-                                    <span
-                                      className={`rounded-full px-2 py-0.5 text-[9px] font-bold uppercase tracking-wider ${transaction.type === 'sale'
-                                        ? 'bg-emerald-50 text-emerald-700'
-                                        : 'bg-red-50 text-red-700'
-                                        }`}
-                                    >
-                                      {transaction.type === 'sale'
-                                        ? 'SALE'
-                                        : 'REFUND'}
-                                    </span>
+                              {/* Top Line */}
+                              <div className="grid min-w-0 grid-cols-[1fr_auto_1fr] items-center gap-2">
+                                {/* Left: Category + Type */}
+                                <div className="flex min-w-0 items-center gap-1.5">
+                                  <div
+                                    className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-md ring-1 ${transaction.category === 'medicine'
+                                      ? 'bg-blue-50 text-blue-600 ring-blue-100'
+                                      : transaction.category === 'general'
+                                        ? 'bg-slate-50 text-slate-600 ring-slate-200'
+                                        : 'bg-emerald-50 text-emerald-600 ring-emerald-100'
+                                      }`}
+                                  >
+                                    <CategoryIcon
+                                      category={transaction.category}
+                                      size={13}
+                                    />
                                   </div>
 
-                                  <p className="mt-1 text-xs text-slate-500">
-                                    {formatTime(transaction.time)}
+                                  <p className="truncate text-[11px] font-semibold text-slate-900">
+                                    {getCategoryName(transaction.category)}
                                   </p>
 
-                                  {transaction.userName && (
-                                    <p className="mt-0.5 text-[11px] text-slate-400">
-                                      By {transaction.userName}
-                                    </p>
-                                  )}
+                                  <span
+                                    className={`shrink-0 rounded-full px-1.5 py-0.5 text-[7px] font-bold uppercase tracking-wide ${transaction.type === 'sale'
+                                      ? 'bg-emerald-50 text-emerald-700'
+                                      : 'bg-red-50 text-red-700'
+                                      }`}
+                                  >
+                                    {transaction.type === 'sale'
+                                      ? 'SALE'
+                                      : 'REFUND'}
+                                  </span>
+                                </div>
 
+                                {/* Center: Time */}
+                                <p className="justify-self-center whitespace-nowrap text-[10px] font-medium text-slate-500">
+                                  {formatTime(transaction.time)}
+                                </p>
+
+                                {/* Right: Customer ID + Actions */}
+                                <div className="relative flex min-w-0 items-center justify-end gap-1.5">
                                   {transaction.type === 'sale' &&
                                     transaction.customerRef && (
-                                      <p className="mt-1 text-[11px] font-medium text-blue-600">
-                                        Customer ID: {transaction.customerRef}
+                                      <p className="whitespace-nowrap text-[10px] font-semibold text-blue-600">
+                                        {transaction.customerRef.replace(
+                                          /^CUST(?=\d)/,
+                                          'CUST-'
+                                        )}
                                       </p>
                                     )}
+
+                                  {transaction.type === 'sale' && (
+                                    <>
+                                      <button
+                                        type="button"
+                                        onClick={(e) => {
+                                          e.stopPropagation()
+                                          setTransactionActionId((currentId) =>
+                                            currentId === transaction.id
+                                              ? null
+                                              : transaction.id
+                                          )
+                                        }}
+                                        className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-slate-400 transition hover:bg-slate-100 hover:text-slate-700"
+                                        aria-label="Transaction actions"
+                                      >
+                                        <span className="text-base font-bold leading-none">
+                                          ⋮
+                                        </span>
+                                      </button>
+
+                                      {transactionActionId === transaction.id && (
+                                        <div
+                                          onClick={(e) => e.stopPropagation()}
+                                          className="absolute right-0 top-8 z-20 w-32 rounded-lg border border-slate-200 bg-white py-1 shadow-lg"
+                                        >
+                                          <button
+                                            type="button"
+                                            onClick={() => {
+                                              setTransactionActionId(null)
+                                              setEditSaleTransaction(transaction)
+                                              setEditSaleForm({
+                                                category: transaction.category,
+                                                amount: String(transaction.amount || ''),
+                                                reason: transaction.reason || '',
+                                              })
+                                            }}
+                                            className="block w-full px-3 py-2 text-left text-[11px] font-medium text-slate-700 hover:bg-slate-50"
+                                          >
+                                            Edit Sale
+                                          </button>
+
+                                          <button
+                                            type="button"
+                                            onClick={() => {
+                                              setTransactionActionId(null)
+                                              setDeleteSaleTransaction(transaction)
+                                            }}
+                                            className="block w-full px-3 py-2 text-left text-[11px] font-medium text-red-600 hover:bg-red-50"
+                                          >
+                                            Delete Sale
+                                          </button>
+                                        </div>
+                                      )}
+                                    </>
+                                  )}
                                 </div>
                               </div>
 
-                              <div
-                                className={`shrink-0 whitespace-nowrap pt-0.5 text-sm font-bold tracking-tight ${transaction.type === 'sale'
-                                  ? 'text-emerald-600'
-                                  : 'text-red-600'
-                                  }`}
-                              >
-                                {transaction.type === 'sale'
-                                  ? '+'
-                                  : '-'}
-                                {formatMoney(transaction.amount)}
+                              {/* Bottom Line */}
+                              <div className="mt-1.5 flex items-center justify-between gap-3 pl-9">
+                                {transaction.userName ? (
+                                  <p className="min-w-0 truncate text-[10px] text-slate-400">
+                                    By {transaction.userName}
+                                  </p>
+                                ) : (
+                                  <span />
+                                )}
+
+                                <div
+                                  className={`shrink-0 whitespace-nowrap text-xs font-bold tracking-tight ${transaction.type === 'sale'
+                                    ? 'text-emerald-600'
+                                    : 'text-red-600'
+                                    }`}
+                                >
+                                  {transaction.type === 'sale'
+                                    ? '+'
+                                    : '-'}
+                                  {formatMoney(transaction.amount)}
+                                </div>
                               </div>
+
+                              {expandedTransactionId === transaction.id &&
+                                transaction.reason && (
+                                  <div className="ml-9 mt-2 rounded-lg border border-slate-100 bg-slate-50 px-2.5 py-2">
+                                    <p className="text-[9px] font-semibold uppercase tracking-wide text-slate-400">
+                                      {transaction.type === 'refund'
+                                        ? 'Refund Reason'
+                                        : 'Sale Note'}
+                                    </p>
+
+                                    <p className="mt-0.5 text-[10px] leading-4 text-slate-600">
+                                      {transaction.reason}
+                                    </p>
+                                  </div>
+                                )}
                             </div>
                           )
                         )}
@@ -3397,6 +3861,222 @@ export default function App() {
         </>
       )
       }
+
+      {/* Edit Sale Modal */}
+
+      {editSaleTransaction && (
+        <Modal
+          title="Edit Sale"
+          onClose={() => {
+            setEditSaleTransaction(null)
+            setEditSaleForm({
+              category: 'medicine',
+              amount: '',
+              reason: '',
+            })
+          }}
+        >
+          <div className="space-y-4">
+            {/* Customer ID */}
+            <div>
+              <label className={ui.label}>
+                Customer ID
+              </label>
+
+              <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm font-semibold text-blue-600">
+                {editSaleTransaction.customerRef
+                  ? editSaleTransaction.customerRef.replace(
+                    /^CUST(?=\d)/,
+                    'CUST-'
+                  )
+                  : '-'}
+              </div>
+            </div>
+
+            {/* Category */}
+            <div>
+              <label className={ui.label}>
+                Category
+              </label>
+
+              <select
+                value={editSaleForm.category}
+                onChange={(e) =>
+                  setEditSaleForm((previous) => ({
+                    ...previous,
+                    category: e.target.value,
+                  }))
+                }
+                className={ui.input}
+              >
+                <option value="medicine">
+                  Medicine
+                </option>
+
+                <option value="general">
+                  General Items
+                </option>
+
+                <option value="dispensing">
+                  Dispensing
+                </option>
+              </select>
+            </div>
+
+            {/* Amount */}
+            <div>
+              <label className={ui.label}>
+                Sale Amount (Rs.)
+              </label>
+
+              <input
+                type="number"
+                min="0"
+                step="any"
+                value={editSaleForm.amount}
+                onChange={(e) =>
+                  setEditSaleForm((previous) => ({
+                    ...previous,
+                    amount: e.target.value,
+                  }))
+                }
+                className={ui.input}
+                placeholder="Enter amount"
+              />
+            </div>
+
+            {/* Note */}
+            <div>
+              <label className={ui.label}>
+                Note / Medicine Name (Optional)
+              </label>
+
+              <textarea
+                rows="3"
+                value={editSaleForm.reason}
+                onChange={(e) =>
+                  setEditSaleForm((previous) => ({
+                    ...previous,
+                    reason: e.target.value,
+                  }))
+                }
+                className={`${ui.input} resize-none`}
+                placeholder="e.g. Panadol 500mg, Syrup, etc."
+              />
+            </div>
+
+            {/* Buttons */}
+            <div className="flex justify-end gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setEditSaleTransaction(null)
+                  setEditSaleForm({
+                    category: 'medicine',
+                    amount: '',
+                    reason: '',
+                  })
+                }}
+                className={ui.secondaryButton}
+              >
+                Cancel
+              </button>
+
+              <button
+                type="button"
+                onClick={handleEditSale}
+                className={ui.primaryButton}
+              >
+                Save Changes
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {/* Delete Sale Confirmation Modal */}
+      {deleteSaleTransaction && (
+        <Modal
+          title="Delete Sale"
+          onClose={() => {
+            setDeleteSaleTransaction(null)
+          }}
+        >
+          <div className="space-y-4">
+            <div className="rounded-xl border border-red-100 bg-red-50 px-4 py-3">
+              <p className="text-sm font-semibold text-red-700">
+                Are you sure you want to delete this sale?
+              </p>
+
+              <p className="mt-1 text-xs leading-5 text-red-600">
+                This action will remove the sale from today&apos;s
+                transactions and update the cash calculations.
+              </p>
+            </div>
+
+            <div className="space-y-3 rounded-xl border border-slate-200 bg-slate-50 p-4">
+              <div className="flex items-center justify-between gap-3">
+                <span className="text-xs text-slate-500">
+                  Category
+                </span>
+
+                <span className="text-xs font-semibold text-slate-900">
+                  {getCategoryName(
+                    deleteSaleTransaction.category
+                  )}
+                </span>
+              </div>
+
+              <div className="flex items-center justify-between gap-3">
+                <span className="text-xs text-slate-500">
+                  Amount
+                </span>
+
+                <span className="text-sm font-bold text-slate-900">
+                  {formatMoney(
+                    deleteSaleTransaction.amount
+                  )}
+                </span>
+              </div>
+
+              <div className="flex items-center justify-between gap-3">
+                <span className="text-xs text-slate-500">
+                  Customer ID
+                </span>
+
+                <span className="text-xs font-semibold text-blue-600">
+                  {deleteSaleTransaction.customerRef
+                    ? deleteSaleTransaction.customerRef.replace(
+                      /^CUST(?=\d)/,
+                      'CUST-'
+                    )
+                    : '-'}
+                </span>
+              </div>
+            </div>
+
+            <div className="flex justify-end gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setDeleteSaleTransaction(null)
+                }}
+                className={ui.secondaryButton}
+              >
+                Cancel
+              </button>
+
+              <button
+                type="button"
+                onClick={handleDeleteSale}
+                className="rounded-xl bg-red-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-red-700"
+              >
+                Delete Sale
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
 
       {/* Refund Modal */}
 
@@ -4376,57 +5056,28 @@ export default function App() {
 
                 {/* Refund Reason */}
 
-                <div className="mt-5">
-                  <label className="mb-2 block text-sm font-semibold text-slate-700">
-                    Refund Reason
-                  </label>
+                {/* Sale Note / Refund Reason */}
+                <div
+                  className="
+    mt-2.5
+    rounded-lg
+    border border-slate-100
+    bg-slate-50/55
+    px-3 py-2.5
+  "
+                >
+                  <p className="text-[9px] font-bold uppercase tracking-wide text-slate-400">
+                    {transaction.type === 'refund'
+                      ? 'Refund Reason'
+                      : 'Sale Note'}
+                  </p>
 
-                  <select
-                    value={refundForm.reason}
-                    onChange={(e) =>
-                      setRefundForm({
-                        ...refundForm,
-                        reason: e.target.value,
-                      })
-                    }
-                    className={ui.input}
-                  >
-                    <option value="">
-                      Select refund reason
-                    </option>
-
-                    <option value="Medicine Already Available At Home">
-                      Medicine Already Available At Home
-                    </option>
-
-                    <option value="Wrong Medicine Purchased">
-                      Wrong Medicine Purchased
-                    </option>
-
-                    <option value="Duplicate Purchase">
-                      Duplicate Purchase
-                    </option>
-
-                    <option value="Customer Changed Mind">
-                      Customer Changed Mind
-                    </option>
-
-                    <option value="Medicine Not Required">
-                      Medicine Not Required
-                    </option>
-
-                    <option value="Doctor Changed Prescription">
-                      Doctor Changed Prescription
-                    </option>
-
-                    <option value="Purchased By Mistake">
-                      Purchased By Mistake
-                    </option>
-
-                    <option value="Other Reason">
-                      Other Reason
-                    </option>
-                  </select>
+                  <p className="mt-0.5 text-xs leading-5 text-slate-700">
+                    {transaction.reason ||
+                      (transaction.type === 'refund'
+                        ? 'No reason provided.'
+                        : 'No note provided.')}
+                  </p>
                 </div>
 
               </div>
@@ -7916,8 +8567,8 @@ function DataExport() {
                   onClick={handleAuditExcelExport}
                   disabled={isExporting}
                   className={`rounded-xl bg-blue-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-blue-700 cursor-pointer ${isExporting
-                      ? 'animate-[processingPulse_1.2s_ease-in-out_infinite]'
-                      : ''
+                    ? 'animate-[processingPulse_1.2s_ease-in-out_infinite]'
+                    : ''
                     }`}
                 >
                   Excel
@@ -8537,15 +9188,15 @@ function SummaryCard({
   icon,
 }) {
   return (
-    <div className={`${ui.cardHover} min-w-0 p-3`}>
+    <div className={`${ui.cardHover} min-w-0 px-2.5 py-2`}>
       <div className="flex items-center justify-between gap-2">
-        <p className="min-w-0 truncate text-xs font-semibold text-slate-500 sm:text-sm">
+        <p className="min-w-0 truncate text-[10px] font-semibold uppercase tracking-wide text-slate-500 sm:text-[11px]">
           {title}
         </p>
 
         {icon && (
           <div
-            className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-xl shadow-inner ring-1 ${icon === 'cash'
+            className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-lg shadow-inner ring-1 ${icon === 'cash'
               ? 'bg-gradient-to-br from-emerald-50 to-emerald-100 text-emerald-600 ring-emerald-100'
               : icon === 'sales'
                 ? 'bg-gradient-to-br from-blue-50 to-blue-100 text-blue-600 ring-blue-100'
@@ -8555,8 +9206,8 @@ function SummaryCard({
               }`}
           >
             <svg
-              width="15"
-              height="15"
+              width="12"
+              height="12"
               viewBox="0 0 24 24"
               fill="none"
               stroke="currentColor"
@@ -8600,12 +9251,16 @@ function SummaryCard({
         )}
       </div>
 
-      <p className="mt-2 text-lg font-bold tracking-tight text-slate-900 sm:text-xl">
+      <p className="mt-1.5 text-base font-bold tracking-tight text-slate-900 sm:text-lg">
         {value}
       </p>
     </div>
   )
 }
+
+/* --------------------------------
+   Sale Category
+-------------------------------- */
 
 /* --------------------------------
    Sale Category
@@ -8618,11 +9273,11 @@ function SaleCategory({
   children,
 }) {
   return (
-    <div className={`${ui.cardHover} h-full min-w-0 p-4`}>
-      <div className="flex items-center justify-between gap-3">
-        <div className="flex items-center gap-3 min-w-0">
+    <div className={`${ui.cardHover} h-full min-w-0 p-2.5`}>
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex items-center gap-2 min-w-0">
           <div
-            className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl ring-1 ${category === 'medicine'
+            className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg ring-1 ${category === 'medicine'
               ? 'bg-blue-50 text-blue-600 ring-blue-100'
               : category === 'general' || category === 'general_items'
                 ? 'bg-slate-50 text-slate-600 ring-slate-200'
@@ -8631,24 +9286,25 @@ function SaleCategory({
           >
             <CategoryIcon
               category={category}
+              size={16}
             />
           </div>
 
           <div className="min-w-0">
-            <p className="truncate font-semibold text-slate-900">
+            <p className="truncate text-xs font-semibold text-slate-900">
               {title}
             </p>
 
-            <p className="mt-0.5 text-sm text-slate-500">
+            <p className="mt-0.5 text-[10px] text-slate-500">
               Today's sales
             </p>
           </div>
         </div>
 
-        <div className="h-2 w-2 shrink-0 rounded-full bg-emerald-500" />
+        <div className="h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-500" />
       </div>
 
-      <p className="mt-4 text-2xl font-bold tracking-tight text-slate-900">
+      <p className="mt-2.5 text-lg font-bold tracking-tight text-slate-900">
         {formatMoney(amount)}
       </p>
 
@@ -10101,6 +10757,7 @@ function MonthlyStatusCard({
 
 function DailyHistory({
   records,
+  currentUser,
   onRefresh,
   onViewDetails,
 }) {
@@ -10121,6 +10778,32 @@ function DailyHistory({
   const [currentPage, setCurrentPage] =
     useState(1)
 
+  const [recordTransactions, setRecordTransactions] =
+    useState({})
+
+  useEffect(() => {
+    async function loadRecordTransactions() {
+      const transactionMap = {}
+
+      for (const record of records || []) {
+        const sessionId =
+          record.sessionId || record.id
+
+        if (!sessionId) continue
+
+        const sessionTransactions =
+          await getTransactionsBySession(sessionId)
+
+        transactionMap[sessionId] =
+          sessionTransactions || []
+      }
+
+      setRecordTransactions(transactionMap)
+    }
+
+    loadRecordTransactions()
+  }, [records])
+
   const recordsPerPage = 10
 
   const filteredRecords = useMemo(() => {
@@ -10131,10 +10814,29 @@ function DailyHistory({
 
     return records.filter(
       (record) => {
+        const sessionId =
+          record.sessionId || record.id
+
+        const sessionTransactions =
+          recordTransactions[sessionId] || []
+
+        const visibleTransactions =
+          currentUser?.role === 'admin'
+            ? sessionTransactions
+            : sessionTransactions.filter(
+              (transaction) =>
+                transaction.userId === currentUser?.id
+            )
+
+        if (
+          currentUser?.role !== 'admin' &&
+          visibleTransactions.length === 0
+        ) {
+          return false
+        }
+
         const formattedDate =
-          formatDate(
-            record.date
-          ).toLowerCase()
+          formatDate(record.date).toLowerCase()
 
         const rawDate = String(
           record.date || ''
@@ -10144,32 +10846,28 @@ function DailyHistory({
           record.id || ''
         ).toLowerCase()
 
-        const sessionId = String(
+        const sessionIdText = String(
           record.sessionId || ''
         ).toLowerCase()
 
         const matchesSearch =
           !search ||
-          formattedDate.includes(
-            search
-          ) ||
+          formattedDate.includes(search) ||
           rawDate.includes(search) ||
           recordId.includes(search) ||
-          sessionId.includes(search)
+          sessionIdText.includes(search)
 
         const matchesStatus =
           statusFilter === 'all' ||
-          record.status ===
-          statusFilter
+          record.status === statusFilter
 
         const matchesCategory =
-          categoryFilter ===
-          'all' ||
-          Number(
-            record.sales?.[
-            categoryFilter
-            ] || 0
-          ) > 0
+          categoryFilter === 'all' ||
+          visibleTransactions.some(
+            (transaction) =>
+              transaction.type === 'sale' &&
+              transaction.category === categoryFilter
+          )
 
         const matchesDate =
           !dateFilter ||
@@ -10185,11 +10883,45 @@ function DailyHistory({
     )
   }, [
     records,
+    currentUser,
+    recordTransactions,
     searchTerm,
     statusFilter,
     categoryFilter,
     dateFilter,
   ])
+
+  const getVisibleNetSales = (record) => {
+    const sessionId =
+      record.sessionId || record.id
+
+    const sessionTransactions =
+      recordTransactions[sessionId] || []
+
+    if (currentUser?.role === 'admin') {
+      return Number(record.netSales || 0)
+    }
+
+    return sessionTransactions
+      .filter(
+        (transaction) =>
+          transaction.userId === currentUser?.id
+      )
+      .reduce(
+        (total, transaction) => {
+          if (transaction.type === 'sale') {
+            return total + Number(transaction.amount || 0)
+          }
+
+          if (transaction.type === 'refund') {
+            return total - Number(transaction.amount || 0)
+          }
+
+          return total
+        },
+        0
+      )
+  }
 
   const hasActiveFilters =
     searchTerm.trim() !== '' ||
@@ -10527,7 +11259,7 @@ function DailyHistory({
 
                     <td className="whitespace-nowrap px-5 py-4 text-sm font-semibold text-slate-900">
                       {formatMoney(
-                        record.netSales
+                        getVisibleNetSales(record)
                       )}
                     </td>
 
@@ -11278,12 +12010,25 @@ function StatusBadge({ status }) {
 -------------------------------- */
 function DailyRecordDetails({
   record,
+  currentUser,
   onBack,
 }) {
   const [transactions, setTransactions] = useState([])
   const [allTransactions, setAllTransactions] = useState([])
   const [loading, setLoading] = useState(true)
   const [transactionPage, setTransactionPage] = useState(1)
+  const [expandedTransactionId, setExpandedTransactionId] =
+    useState(null)
+  const [transactionActionId, setTransactionActionId] =
+    useState(null)
+  const [editSaleTransaction, setEditSaleTransaction] =
+    useState(null)
+
+  const [editSaleForm, setEditSaleForm] = useState({
+    category: 'medicine',
+    amount: '',
+    reason: '',
+  })
 
   const transactionsPerPage = 5
 
@@ -11298,20 +12043,24 @@ function DailyRecordDetails({
         const currentTransactions =
           currentRecordTransactions || []
 
-        setTransactions(currentTransactions)
+        const isAdmin =
+          currentUser?.role === 'admin'
 
-        /*
-         * Load transactions from completed sessions as well.
-         *
-         * This is required because a refund can be created
-         * in today's session while its original sale belongs
-         * to an older/completed session.
-         */
+        const visibleCurrentTransactions =
+          isAdmin
+            ? currentTransactions
+            : currentTransactions.filter(
+              (transaction) =>
+                transaction.userId === currentUser?.id
+            )
+
+        setTransactions(visibleCurrentTransactions)
+
         const completedSessions =
           await getDailySessions()
 
         const linkedTransactions = [
-          ...currentTransactions,
+          ...visibleCurrentTransactions,
         ]
 
         for (const session of completedSessions || []) {
@@ -11325,8 +12074,16 @@ function DailyRecordDetails({
                 session.sessionId
               )
 
+            const visibleSessionTransactions =
+              isAdmin
+                ? sessionTransactions || []
+                : (sessionTransactions || []).filter(
+                  (transaction) =>
+                    transaction.userId === currentUser?.id
+                )
+
             linkedTransactions.push(
-              ...(sessionTransactions || [])
+              ...visibleSessionTransactions
             )
           }
         }
@@ -11343,7 +12100,7 @@ function DailyRecordDetails({
     }
 
     loadTransactions()
-  }, [record])
+  }, [record, currentUser])
 
   useEffect(() => {
     setTransactionPage(1)
@@ -11371,11 +12128,73 @@ function DailyRecordDetails({
         ? 'Shortage'
         : 'Extra Cash')
 
-  const categoryTotals = {
-    medicine: Number(record.sales?.medicine || 0),
-    general: Number(record.sales?.general || 0),
-    dispensing: Number(record.sales?.dispensing || 0),
-  }
+  const visibleGrossSales = transactions
+    .filter(
+      (transaction) =>
+        transaction.type === 'sale'
+    )
+    .reduce(
+      (total, transaction) =>
+        total + Number(transaction.amount || 0),
+      0
+    )
+
+  const visibleRefunds = transactions
+    .filter(
+      (transaction) =>
+        transaction.type === 'refund'
+    )
+    .reduce(
+      (total, transaction) =>
+        total + Number(transaction.amount || 0),
+      0
+    )
+
+  const visibleNetSales =
+    visibleGrossSales - visibleRefunds
+
+  const categoryTotals =
+    currentUser?.role === 'admin'
+      ? {
+        medicine: Number(record.sales?.medicine || 0),
+        general: Number(record.sales?.general || 0),
+        dispensing: Number(record.sales?.dispensing || 0),
+      }
+      : {
+        medicine: transactions
+          .filter(
+            (transaction) =>
+              transaction.type === 'sale' &&
+              transaction.category === 'medicine'
+          )
+          .reduce(
+            (total, transaction) =>
+              total + Number(transaction.amount || 0),
+            0
+          ),
+        general: transactions
+          .filter(
+            (transaction) =>
+              transaction.type === 'sale' &&
+              transaction.category === 'general'
+          )
+          .reduce(
+            (total, transaction) =>
+              total + Number(transaction.amount || 0),
+            0
+          ),
+        dispensing: transactions
+          .filter(
+            (transaction) =>
+              transaction.type === 'sale' &&
+              transaction.category === 'dispensing'
+          )
+          .reduce(
+            (total, transaction) =>
+              total + Number(transaction.amount || 0),
+            0
+          ),
+      }
 
   const getTransactionAmount = (transaction) => {
     const amount = Number(transaction.amount || 0)
@@ -11537,7 +12356,7 @@ function DailyRecordDetails({
             </p>
 
             <p className="relative mt-1 text-sm font-extrabold tracking-tight text-emerald-700 sm:text-base">
-              {formatMoney(record.grossSales)}
+              {formatMoney(currentUser?.role === 'admin' ? record.grossSales : visibleGrossSales)}
             </p>
           </div>
 
@@ -11579,7 +12398,7 @@ function DailyRecordDetails({
             </p>
 
             <p className="relative mt-1 text-sm font-extrabold tracking-tight text-red-600 sm:text-base">
-              {formatMoney(record.totalRefunds)}
+              {formatMoney(currentUser?.role === 'admin' ? record.totalRefunds : visibleRefunds)}
             </p>
           </div>
 
@@ -11622,7 +12441,7 @@ function DailyRecordDetails({
             </p>
 
             <p className="relative mt-1 text-sm font-extrabold tracking-tight text-violet-700 sm:text-base">
-              {formatMoney(record.netSales)}
+              {formatMoney(currentUser?.role === 'admin' ? record.netSales : visibleNetSales)}
             </p>
           </div>
 
@@ -12336,7 +13155,15 @@ function DailyRecordDetails({
                 return (
                   <div
                     key={transaction.id}
+                    onClick={() => {
+                      setExpandedTransactionId((currentId) =>
+                        currentId === transaction.id
+                          ? null
+                          : transaction.id
+                      )
+                    }}
                     className={`
+                      cursor-pointer
                 group relative overflow-hidden rounded-xl
                 border
                 bg-white/75
@@ -12668,173 +13495,177 @@ function DailyRecordDetails({
                     )}
 
                     {/* Refund Details */}
-                    {(transaction.reason ||
-                      transaction.type === 'refund') && (
-                        <div
-                          className="
+                    {expandedTransactionId === transaction.id && (
+                      <div
+                        className="
         relative
         border-t border-slate-100/80
         px-3 py-2.5
         sm:px-4 sm:py-3
       "
-                        >
-                          {/* Original Sale */}
-                          {transaction.type === 'refund' && (
-                            <div>
-                              <div className="mb-2 flex items-center gap-2">
-                                <div className="h-px flex-1 bg-slate-100" />
+                      >
+                        {/* Original Sale */}
+                        {transaction.type === 'refund' && (
+                          <div>
+                            <div className="mb-2 flex items-center gap-2">
+                              <div className="h-px flex-1 bg-slate-100" />
 
-                                <p className="shrink-0 text-[9px] font-bold uppercase tracking-[0.12em] text-slate-400">
-                                  Original Sale
-                                </p>
+                              <p className="shrink-0 text-[9px] font-bold uppercase tracking-[0.12em] text-slate-400">
+                                Original Sale
+                              </p>
 
-                                <div className="h-px flex-1 bg-slate-100" />
-                              </div>
+                              <div className="h-px flex-1 bg-slate-100" />
+                            </div>
 
-                              {originalSale ? (
-                                <div
-                                  className="
+                            {originalSale ? (
+                              <div
+                                className="
                 grid grid-cols-1 gap-2
                 sm:grid-cols-2
                 lg:grid-cols-5
               "
-                                >
-                                  {/* Date */}
-                                  <div
-                                    className="
-                  rounded-lg
-                  border border-slate-100
-                  bg-white/65
-                  px-2.5 py-2
-                "
-                                  >
-                                    <p className="text-[9px] font-semibold uppercase tracking-wide text-slate-400">
-                                      Date
-                                    </p>
-
-                                    <p className="mt-0.5 text-[11px] font-medium text-slate-700 sm:text-xs">
-                                      {originalSale.date
-                                        ? formatDate(originalSale.date)
-                                        : 'N/A'}
-                                    </p>
-                                  </div>
-
-                                  {/* Time */}
-                                  <div
-                                    className="
-                  rounded-lg
-                  border border-slate-100
-                  bg-white/65
-                  px-2.5 py-2
-                "
-                                  >
-                                    <p className="text-[9px] font-semibold uppercase tracking-wide text-slate-400">
-                                      Time
-                                    </p>
-
-                                    <p className="mt-0.5 text-[11px] font-medium text-slate-700 sm:text-xs">
-                                      {originalSale.time
-                                        ? formatTime(originalSale.time)
-                                        : 'N/A'}
-                                    </p>
-                                  </div>
-
-                                  {/* Category */}
-                                  <div
-                                    className="
-                  rounded-lg
-                  border border-slate-100
-                  bg-white/65
-                  px-2.5 py-2
-                "
-                                  >
-                                    <p className="text-[9px] font-semibold uppercase tracking-wide text-slate-400">
-                                      Category
-                                    </p>
-
-                                    <p className="mt-0.5 truncate text-[11px] font-medium text-slate-700 sm:text-xs">
-                                      {getCategoryName(originalSale.category)}
-                                    </p>
-                                  </div>
-
-                                  {/* Amount */}
-                                  <div
-                                    className="
-                  rounded-lg
-                  border border-slate-100
-                  bg-white/65
-                  px-2.5 py-2
-                "
-                                  >
-                                    <p className="text-[9px] font-semibold uppercase tracking-wide text-slate-400">
-                                      Amount
-                                    </p>
-
-                                    <p className="mt-0.5 text-[11px] font-bold text-slate-800 sm:text-xs">
-                                      {formatMoney(originalSale.amount)}
-                                    </p>
-                                  </div>
-
-                                  {/* Customer ID */}
-                                  <div
-                                    className="
-                  rounded-lg
-                  border border-slate-100
-                  bg-white/65
-                  px-2.5 py-2
-                "
-                                  >
-                                    <p className="text-[9px] font-semibold uppercase tracking-wide text-slate-400">
-                                      Customer ID
-                                    </p>
-
-                                    <p className="mt-0.5 truncate text-[11px] font-medium text-slate-700 sm:text-xs">
-                                      {originalSale.customerRef ||
-                                        transaction.customerRef ||
-                                        'N/A'}
-                                    </p>
-                                  </div>
-                                </div>
-                              ) : (
+                              >
+                                {/* Date */}
                                 <div
                                   className="
+                  rounded-lg
+                  border border-slate-100
+                  bg-white/65
+                  px-2.5 py-2
+                "
+                                >
+                                  <p className="text-[9px] font-semibold uppercase tracking-wide text-slate-400">
+                                    Date
+                                  </p>
+
+                                  <p className="mt-0.5 text-[11px] font-medium text-slate-700 sm:text-xs">
+                                    {originalSale.date
+                                      ? formatDate(originalSale.date)
+                                      : 'N/A'}
+                                  </p>
+                                </div>
+
+                                {/* Time */}
+                                <div
+                                  className="
+                  rounded-lg
+                  border border-slate-100
+                  bg-white/65
+                  px-2.5 py-2
+                "
+                                >
+                                  <p className="text-[9px] font-semibold uppercase tracking-wide text-slate-400">
+                                    Time
+                                  </p>
+
+                                  <p className="mt-0.5 text-[11px] font-medium text-slate-700 sm:text-xs">
+                                    {originalSale.time
+                                      ? formatTime(originalSale.time)
+                                      : 'N/A'}
+                                  </p>
+                                </div>
+
+                                {/* Category */}
+                                <div
+                                  className="
+                  rounded-lg
+                  border border-slate-100
+                  bg-white/65
+                  px-2.5 py-2
+                "
+                                >
+                                  <p className="text-[9px] font-semibold uppercase tracking-wide text-slate-400">
+                                    Category
+                                  </p>
+
+                                  <p className="mt-0.5 truncate text-[11px] font-medium text-slate-700 sm:text-xs">
+                                    {getCategoryName(originalSale.category)}
+                                  </p>
+                                </div>
+
+                                {/* Amount */}
+                                <div
+                                  className="
+                  rounded-lg
+                  border border-slate-100
+                  bg-white/65
+                  px-2.5 py-2
+                "
+                                >
+                                  <p className="text-[9px] font-semibold uppercase tracking-wide text-slate-400">
+                                    Amount
+                                  </p>
+
+                                  <p className="mt-0.5 text-[11px] font-bold text-slate-800 sm:text-xs">
+                                    {formatMoney(originalSale.amount)}
+                                  </p>
+                                </div>
+
+                                {/* Customer ID */}
+                                <div
+                                  className="
+                  rounded-lg
+                  border border-slate-100
+                  bg-white/65
+                  px-2.5 py-2
+                "
+                                >
+                                  <p className="text-[9px] font-semibold uppercase tracking-wide text-slate-400">
+                                    Customer ID
+                                  </p>
+
+                                  <p className="mt-0.5 truncate text-[11px] font-medium text-slate-700 sm:text-xs">
+                                    {originalSale.customerRef ||
+                                      transaction.customerRef ||
+                                      'N/A'}
+                                  </p>
+                                </div>
+                              </div>
+                            ) : (
+                              <div
+                                className="
                 rounded-lg
                 border border-amber-100
                 bg-amber-50/60
                 px-3 py-2
               "
-                                >
-                                  <p className="text-xs text-amber-700">
-                                    {transaction.originalSaleId
-                                      ? `Sale reference: ${transaction.originalSaleId}`
-                                      : 'Original sale record unavailable.'}
-                                  </p>
-                                </div>
-                              )}
-                            </div>
-                          )}
-
-                          {/* Refund Reason */}
-                          <div
-                            className="
-          mt-2.5
-          rounded-lg
-          border border-slate-100
-          bg-slate-50/55
-          px-3 py-2.5
-        "
-                          >
-                            <p className="text-[9px] font-bold uppercase tracking-wide text-slate-400">
-                              Refund Reason
-                            </p>
-
-                            <p className="mt-0.5 text-xs leading-5 text-slate-700">
-                              {transaction.reason ||
-                                'No reason provided.'}
-                            </p>
+                              >
+                                <p className="text-xs text-amber-700">
+                                  {transaction.originalSaleId
+                                    ? `Sale reference: ${transaction.originalSaleId}`
+                                    : 'Original sale record unavailable.'}
+                                </p>
+                              </div>
+                            )}
                           </div>
+                        )}
+
+                        {/* Refund Reason */}
+                        {/* Sale Note / Refund Reason */}
+                        <div
+                          className="
+    mt-2.5
+    rounded-lg
+    border border-slate-100
+    bg-slate-50/55
+    px-3 py-2.5
+  "
+                        >
+                          <p className="text-[9px] font-bold uppercase tracking-wide text-slate-400">
+                            {transaction.type === 'refund'
+                              ? 'Refund Reason'
+                              : 'Sale Note'}
+                          </p>
+
+                          <p className="mt-0.5 text-xs leading-5 text-slate-700">
+                            {transaction.reason ||
+                              (transaction.type === 'refund'
+                                ? 'No reason provided.'
+                                : 'No note provided.')}
+                          </p>
                         </div>
-                      )}
+                      </div>
+                    )}
                   </div>
                 )
               })}
