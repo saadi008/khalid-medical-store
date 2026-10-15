@@ -298,6 +298,97 @@ export async function createUser({
     })
 }
 
+/* =========================================================
+   RESET USER PASSWORD
+========================================================= */
+
+export async function resetUserPassword({
+    username,
+    name,
+    newPassword,
+}) {
+    const db = await openDB()
+
+    const cleanUsername =
+        username.trim().toLowerCase()
+
+    const cleanName =
+        name.trim().toLowerCase()
+
+    if (!cleanUsername) {
+        db.close()
+        throw new Error('Username is required.')
+    }
+
+    if (!cleanName) {
+        db.close()
+        throw new Error('Full name is required.')
+    }
+
+    if (!newPassword) {
+        db.close()
+        throw new Error('New password is required.')
+    }
+
+    return new Promise((resolve, reject) => {
+        const transaction = db.transaction(
+            STORES.USERS,
+            'readwrite'
+        )
+
+        const store = transaction.objectStore(
+            STORES.USERS
+        )
+
+        const request = store.getAll()
+
+        request.onsuccess = () => {
+            const users = request.result || []
+
+            const user = users.find(
+                (item) =>
+                    item.username?.trim().toLowerCase() ===
+                    cleanUsername &&
+                    item.name?.trim().toLowerCase() ===
+                    cleanName
+            )
+
+            if (!user) {
+                db.close()
+                reject(
+                    new Error(
+                        'Username and full name do not match any account.'
+                    )
+                )
+                return
+            }
+
+            user.password = newPassword
+
+            store.put(user)
+
+            transaction.oncomplete = () => {
+                db.close()
+
+                resolve({
+                    success: true,
+                    userId: user.id,
+                    username: user.username,
+                })
+            }
+        }
+
+        request.onerror = () => {
+            db.close()
+            reject(request.error)
+        }
+
+        transaction.onerror = () => {
+            db.close()
+            reject(transaction.error)
+        }
+    })
+}
 
 /* =========================================================
    GET USERS

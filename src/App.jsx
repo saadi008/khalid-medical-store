@@ -26,6 +26,7 @@ import {
   hasRegisteredUsers,
   createUser,
   getUsers,
+  resetUserPassword,
   generateEncryptedBackupFile,
   previewEncryptedBackupRestore,
   confirmEncryptedBackupRestore,
@@ -3241,6 +3242,7 @@ export default function App() {
         >
           <DailyHistory
             records={dailyRecords}
+            currentUser={currentUser}
             onViewDetails={(record) => {
               setSelectedRecord(record)
               setCurrentView('recordDetails')
@@ -5589,6 +5591,7 @@ export default function App() {
 
 function LoginScreen({ onLogin }) {
   const [mode, setMode] = useState('login')
+  const [forgotPasswordMode, setForgotPasswordMode] = useState(false)
 
   const [hasUsers, setHasUsers] = useState(null)
   const [checkingUsers, setCheckingUsers] = useState(true)
@@ -5596,10 +5599,16 @@ function LoginScreen({ onLogin }) {
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
   const [showPassword, setShowPassword] = useState(false)
-
   const [name, setName] = useState('')
   const [confirmPassword, setConfirmPassword] =
     useState('')
+  const [resetPassword, setResetPassword] = useState('')
+  const [resetConfirmPassword, setResetConfirmPassword] =
+    useState('')
+  const [showResetPassword, setShowResetPassword] =
+    useState(false)
+  const [showResetConfirmPassword, setShowResetConfirmPassword] =
+    useState(false)
   const [showConfirmPassword, setShowConfirmPassword] =
     useState(false)
 
@@ -5695,6 +5704,115 @@ function LoginScreen({ onLogin }) {
       )
     } finally {
       setLoggingIn(false)
+    }
+  }
+
+  async function handleForgotPassword(e) {
+    e.preventDefault()
+
+    setError('')
+    setSuccess('')
+
+    if (!username.trim()) {
+      setError('Please enter your username.')
+      return
+    }
+
+    if (!name.trim()) {
+      setError('Please enter your full name.')
+      return
+    }
+
+    if (!resetPassword) {
+      setError('Please enter your new password.')
+      return
+    }
+
+    const passwordRequirements = {
+      minLength: resetPassword.length >= 8,
+      uppercase: /[A-Z]/.test(resetPassword),
+      lowercase: /[a-z]/.test(resetPassword),
+      number: /[0-9]/.test(resetPassword),
+      special: /[^A-Za-z0-9]/.test(resetPassword),
+    }
+
+    if (!passwordRequirements.minLength) {
+      setError(
+        'Password must be at least 8 characters long.'
+      )
+      return
+    }
+
+    if (!passwordRequirements.uppercase) {
+      setError(
+        'Password must contain at least one uppercase letter.'
+      )
+      return
+    }
+
+    if (!passwordRequirements.lowercase) {
+      setError(
+        'Password must contain at least one lowercase letter.'
+      )
+      return
+    }
+
+    if (!passwordRequirements.number) {
+      setError(
+        'Password must contain at least one number.'
+      )
+      return
+    }
+
+    if (!passwordRequirements.special) {
+      setError(
+        'Password must contain at least one special character.'
+      )
+      return
+    }
+
+    if (!resetConfirmPassword) {
+      setError(
+        'Please confirm your new password.'
+      )
+      return
+    }
+
+    if (resetPassword !== resetConfirmPassword) {
+      setError('Passwords do not match.')
+      return
+    }
+
+    try {
+      await resetUserPassword({
+        username,
+        name,
+        newPassword: resetPassword,
+      })
+
+      setSuccess(
+        'Password reset successfully. You can now sign in with your new password.'
+      )
+
+      setPassword('')
+      setResetPassword('')
+      setResetConfirmPassword('')
+
+      setTimeout(() => {
+        setForgotPasswordMode(false)
+        setSuccess('')
+        setError('')
+      }, 1800)
+    } catch (error) {
+      console.error(
+        'Password reset error:',
+        error
+      )
+
+      setError(
+        error?.message ||
+        'Unable to reset password. Please check your details.'
+      )
     }
   }
 
@@ -5868,6 +5986,7 @@ function LoginScreen({ onLogin }) {
   }
 
   const isSignup = mode === 'signup'
+  const isForgotPassword = forgotPasswordMode
 
   return (
     <div className="min-h-screen bg-slate-950 flex items-center justify-center px-3 py-6 sm:px-6 sm:py-8 relative overflow-hidden">
@@ -5908,13 +6027,228 @@ function LoginScreen({ onLogin }) {
 
               {/* Page Description */}
               <p className="mt-3 text-[13px] leading-5 text-slate-400 sm:text-sm">
-                {isSignup
-                  ? 'Create your administrator account'
-                  : 'Sign in to continue'}
+                {isForgotPassword
+                  ? 'Reset your account password'
+                  : isSignup
+                    ? 'Create your administrator account'
+                    : 'Sign in to continue'}
               </p>
             </div>
 
-            {isSignup ? (
+            {isForgotPassword ? (
+              <form
+                onSubmit={handleForgotPassword}
+                className="mx-auto w-full max-w-lg space-y-4"
+              >
+                <div>
+                  <label className="mb-1.5 block text-[12px] font-semibold text-slate-200">
+                    Username
+                  </label>
+
+                  <input
+                    type="text"
+                    value={username}
+                    onChange={(e) =>
+                      setUsername(e.target.value)
+                    }
+                    placeholder="Enter your username"
+                    autoComplete="username"
+                    className="w-full rounded-xl border border-slate-700 bg-slate-800/80 px-3 py-3 text-sm text-white shadow-sm outline-none transition-all duration-200 placeholder:text-slate-500 hover:border-slate-600 focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10"
+                  />
+                </div>
+
+                <div>
+                  <label className="mb-1.5 block text-[12px] font-semibold text-slate-200">
+                    Full Name
+                  </label>
+
+                  <input
+                    type="text"
+                    value={name}
+                    onChange={(e) =>
+                      setName(e.target.value)
+                    }
+                    placeholder="Enter your full name"
+                    autoComplete="name"
+                    className="w-full rounded-xl border border-slate-700 bg-slate-800/80 px-3 py-3 text-sm text-white shadow-sm outline-none transition-all duration-200 placeholder:text-slate-500 hover:border-slate-600 focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10"
+                  />
+                </div>
+
+                <div>
+                  <label className="mb-1.5 block text-[12px] font-semibold text-slate-200">
+                    New Password
+                  </label>
+
+                  <div className="relative">
+                    <input
+                      type={
+                        showResetPassword
+                          ? 'text'
+                          : 'password'
+                      }
+                      value={resetPassword}
+                      onChange={(e) =>
+                        setResetPassword(e.target.value)
+                      }
+                      placeholder="Enter new password"
+                      autoComplete="new-password"
+                      className="w-full rounded-xl border border-slate-700 bg-slate-800/80 px-3 py-3 pr-12 text-sm text-white shadow-sm outline-none transition-all duration-200 placeholder:text-slate-500 hover:border-slate-600 focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10"
+                    />
+
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setShowResetPassword(
+                          (value) => !value
+                        )
+                      }
+                      className="absolute right-3 top-1/2 -translate-y-1/2 rounded-lg p-1.5 text-slate-400 transition hover:bg-slate-700 hover:text-blue-400 focus:outline-none"
+                    >
+                      {showResetPassword
+                        ? '🙈'
+                        : '👁️'}
+                    </button>
+                  </div>
+                </div>
+
+                <div>
+                  <label className="mb-1.5 block text-[12px] font-semibold text-slate-200">
+                    Confirm New Password
+                  </label>
+
+                  <div className="relative">
+                    <input
+                      type={
+                        showResetConfirmPassword
+                          ? 'text'
+                          : 'password'
+                      }
+                      value={resetConfirmPassword}
+                      onChange={(e) =>
+                        setResetConfirmPassword(
+                          e.target.value
+                        )
+                      }
+                      placeholder="Confirm new password"
+                      autoComplete="new-password"
+                      className="w-full rounded-xl border border-slate-700 bg-slate-800/80 px-3 py-3 pr-12 text-sm text-white shadow-sm outline-none transition-all duration-200 placeholder:text-slate-500 hover:border-slate-600 focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10"
+                    />
+
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setShowResetConfirmPassword(
+                          (value) => !value
+                        )
+                      }
+                      className="absolute right-3 top-1/2 -translate-y-1/2 rounded-lg p-1.5 text-slate-400 transition hover:bg-slate-700 hover:text-blue-400 focus:outline-none"
+                    >
+                      {showResetConfirmPassword
+                        ? '🙈'
+                        : '👁️'}
+                    </button>
+                  </div>
+                </div>
+
+                <div className="rounded-xl border border-blue-900/50 bg-blue-950/40 px-4 py-3">
+                  <p className="text-xs font-semibold text-blue-300">
+                    Password requirements
+                  </p>
+
+                  <div className="mt-2 space-y-1 text-xs text-slate-400">
+                    <p>
+                      {resetPassword.length >= 8
+                        ? '✓'
+                        : '•'}{' '}
+                      At least 8 characters
+                    </p>
+
+                    <p>
+                      {/[A-Z]/.test(resetPassword)
+                        ? '✓'
+                        : '•'}{' '}
+                      One uppercase letter
+                    </p>
+
+                    <p>
+                      {/[a-z]/.test(resetPassword)
+                        ? '✓'
+                        : '•'}{' '}
+                      One lowercase letter
+                    </p>
+
+                    <p>
+                      {/[0-9]/.test(resetPassword)
+                        ? '✓'
+                        : '•'}{' '}
+                      One number
+                    </p>
+
+                    <p>
+                      {/[^A-Za-z0-9]/.test(
+                        resetPassword
+                      )
+                        ? '✓'
+                        : '•'}{' '}
+                      One special character
+                    </p>
+                  </div>
+                </div>
+
+                {error && (
+                  <div className="flex items-start gap-3 rounded-xl border border-red-200 bg-red-50 px-4 py-3">
+                    <div className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-red-100 text-red-600">
+                      <span className="text-xs font-bold">
+                        !
+                      </span>
+                    </div>
+
+                    <p className="text-sm font-medium leading-5 text-red-700">
+                      {error}
+                    </p>
+                  </div>
+                )}
+
+                {success && (
+                  <div className="flex items-start gap-3 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3">
+                    <div className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-emerald-100 text-emerald-600">
+                      <span className="text-xs font-bold">
+                        ✓
+                      </span>
+                    </div>
+
+                    <p className="text-sm font-medium leading-5 text-emerald-700">
+                      {success}
+                    </p>
+                  </div>
+                )}
+
+                <button
+                  type="submit"
+                  className="w-full rounded-xl bg-gradient-to-r from-blue-500 via-blue-600 to-blue-700 px-4 py-3 text-sm font-semibold text-white shadow-[0_10px_24px_rgba(37,99,235,0.28)] transition-all duration-200 hover:-translate-y-0.5 hover:from-blue-600 hover:via-blue-700 hover:to-blue-800 hover:shadow-[0_14px_30px_rgba(37,99,235,0.35)] active:translate-y-0 focus:outline-none focus:ring-4 focus:ring-blue-500/20"
+                >
+                  Reset Password
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setForgotPasswordMode(false)
+                    setError('')
+                    setSuccess('')
+                    setUsername('')
+                    setName('')
+                    setResetPassword('')
+                    setResetConfirmPassword('')
+                    setShowResetPassword(false)
+                    setShowResetConfirmPassword(false)
+                  }}
+                  className="w-full text-center text-sm font-semibold text-slate-400 transition hover:text-white hover:underline"
+                >
+                  ← Back to Login
+                </button>
+              </form>
+            ) : isSignup ? (
               <form onSubmit={handleCreateAccount} className="space-y-3.5">
                 <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                   <div>
@@ -6285,6 +6619,20 @@ function LoginScreen({ onLogin }) {
                   {loggingIn
                     ? 'Signing in...'
                     : 'Sign In'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setForgotPasswordMode(true)
+                    setError('')
+                    setSuccess('')
+                    setPassword('')
+                    setResetPassword('')
+                    setResetConfirmPassword('')
+                  }}
+                  className="w-full text-center text-sm font-semibold text-blue-400 transition hover:text-blue-300 hover:underline"
+                >
+                  Forgot Password?
                 </button>
               </form>
             )}
@@ -10668,21 +11016,28 @@ function MonthlyCategoryCard({
       </div>
 
       {/* Total Sales */}
-      <div className="relative mt-3 border-t border-slate-100/80 pt-3">
-        <p className="text-[9px] font-semibold uppercase tracking-[0.08em] text-slate-400">
+      <div
+        className="
+    relative mt-3
+    flex items-center justify-between
+    gap-3
+    border-t border-slate-100/80
+    pt-3
+  "
+      >
+        <p className="whitespace-nowrap text-[9px] font-semibold uppercase tracking-[0.08em] text-slate-400">
           Total Sales
         </p>
 
         <p
           className={`
-            mt-0.5
-            break-words
-            text-xl
-            font-extrabold
-            tracking-tight
-            sm:text-2xl
-            ${styles.amount}
-          `}
+      whitespace-nowrap
+      text-xl
+      font-extrabold
+      tracking-tight
+      sm:text-2xl
+      ${styles.amount}
+    `}
         >
           {formatMoney(amount)}
         </p>
@@ -13196,145 +13551,139 @@ function DailyRecordDetails({
                       -------------------------------- */
                       <div
                         className="
-      relative flex flex-col gap-3
-      px-3 py-2.5
-      sm:flex-row sm:items-center sm:gap-3
-      sm:px-4 sm:py-3
-    "
+    flex min-w-0 w-full items-center
+    gap-1.5
+    overflow-hidden
+    px-2 py-2
+    sm:gap-2 sm:px-3
+  "
                       >
-                        {/* Category + Sale + Date/Time */}
-                        <div className="flex min-w-0 shrink-0 items-center gap-2.5 sm:w-[22%]">
-                          {/* Category Icon */}
-                          <div
-                            className="
-          flex h-9 w-9 shrink-0 items-center justify-center
-          rounded-lg border border-blue-100
-          bg-blue-50 text-blue-600 shadow-sm
-        "
-                          >
-                            <CategoryIcon
-                              category={transaction.category}
-                              size={17}
-                            />
-                          </div>
-
-                          <div className="min-w-0">
-                            <div className="flex flex-wrap items-center gap-1.5">
-                              <p className="truncate text-xs font-bold text-slate-800 sm:text-sm">
-                                {getCategoryName(transaction.category)}
-                              </p>
-
-                              <span
-                                className="
-              rounded-full bg-emerald-100
-              px-1.5 py-0.5
-              text-[9px] font-bold tracking-wide
-              text-emerald-700
-            "
-                              >
-                                SALE
-                              </span>
-                            </div>
-
-                            <p className="mt-0.5 whitespace-nowrap text-[10px] font-medium text-slate-400 sm:text-[11px]">
-                              {transaction.date
-                                ? formatDate(transaction.date)
-                                : '-'}
-                              {' · '}
-                              {transaction.time
-                                ? formatTime(transaction.time)
-                                : '-'}
-                            </p>
-                          </div>
+                        {/* Category Icon */}
+                        <div
+                          className="
+      flex h-6 w-6 shrink-0 items-center justify-center
+      rounded-md border border-blue-100
+      bg-blue-50 text-blue-600
+    "
+                        >
+                          <CategoryIcon
+                            category={transaction.category}
+                            size={13}
+                          />
                         </div>
+
+                        {/* Category */}
+                        <span
+                          className="
+      shrink-0 whitespace-nowrap
+      text-[10px] font-bold text-slate-800
+      sm:text-[11px]
+    "
+                        >
+                          {getCategoryName(transaction.category)}
+                        </span>
+
+                        {/* SALE */}
+                        <span
+                          className="
+      shrink-0 whitespace-nowrap
+      rounded-full bg-emerald-100
+      px-1.5 py-0.5
+      text-[8px] font-bold tracking-wide
+      text-emerald-700
+      sm:text-[9px]
+    "
+                        >
+                          SALE
+                        </span>
+
+                        {/* Date / Time */}
+                        <span
+                          className="
+      shrink-0 whitespace-nowrap
+      text-[8px] font-medium text-slate-400
+      sm:text-[10px]
+    "
+                        >
+                          {transaction.date
+                            ? formatDate(transaction.date)
+                            : '-'}
+                          {' · '}
+                          {transaction.time
+                            ? formatTime(transaction.time)
+                            : '-'}
+                        </span>
 
                         {/* Customer ID */}
-                        <div
+                        <span
                           className="
-        min-w-0 rounded-lg
-        border border-slate-100
-        bg-white/65
-        px-2.5 py-2
-        sm:flex-1
-      "
+  min-w-0 truncate
+  ml-2
+  text-[8px] font-medium text-slate-700
+  sm:ml-4 sm:text-[10px]
+"
                         >
-                          <p className="text-[9px] font-bold uppercase tracking-wide text-slate-400">
-                            Customer ID
-                          </p>
+                          <span className="font-semibold text-slate-400">
+                            Customer ID:
+                          </span>{' '}
+                          {transaction.customerRef || 'N/A'}
+                        </span>
 
-                          <p className="mt-0.5 truncate text-[11px] font-semibold text-slate-700 sm:text-xs">
-                            {transaction.customerRef || 'N/A'}
-                          </p>
-                        </div>
+                        <span className="shrink-0 text-[8px] text-slate-300 sm:text-[10px]">
+                          •
+                        </span>
 
                         {/* Recorded By */}
-                        <div
+                        <span
                           className="
-        min-w-0 rounded-lg
-        border border-slate-100
-        bg-white/65
-        px-2.5 py-2
-        sm:flex-1
-      "
+  min-w-0 truncate
+  ml-2
+  text-[8px] font-medium text-slate-700
+  sm:ml-4 sm:text-[10px]
+"
                         >
-                          <p className="text-[9px] font-bold uppercase tracking-wide text-slate-400">
-                            Recorded By
-                          </p>
-
-                          <p className="mt-0.5 truncate text-[11px] font-semibold text-slate-700 sm:text-xs">
+                          <span className="font-semibold text-slate-400">
+                            Recorded By:
+                          </span>{' '}
+                          <span className="capitalize">
                             {transaction.userName ||
                               transaction.username ||
                               'N/A'}
-                          </p>
-                        </div>
+                          </span>
+                        </span>
+
+                        <span className="shrink-0 text-[8px] text-slate-300 sm:text-[10px]">
+                          •
+                        </span>
 
                         {/* Role */}
-                        <div
+                        <span
                           className="
-        min-w-0 rounded-lg
-        border border-slate-100
-        bg-white/65
-        px-2.5 py-2
-        sm:flex-1
-      "
+  shrink-0 whitespace-nowrap
+  ml-2
+  text-[8px] font-medium text-slate-700
+  sm:ml-4 sm:text-[10px]
+"
                         >
-                          <p className="text-[9px] font-bold uppercase tracking-wide text-slate-400">
-                            Role
-                          </p>
-
-                          <p className="mt-0.5 truncate text-[11px] font-semibold capitalize text-slate-700 sm:text-xs">
+                          <span className="font-semibold text-slate-400">
+                            Role:
+                          </span>{' '}
+                          <span className="capitalize">
                             {transaction.userRole || 'N/A'}
-                          </p>
-                        </div>
+                          </span>
+                        </span>
 
                         {/* Amount */}
-                        <div
+                        <span
                           className="
-        shrink-0
-        rounded-lg
-        border border-emerald-100
-        bg-emerald-50/50
-        px-3 py-2
-        text-left
-        sm:min-w-[125px]
-        sm:text-right
-      "
+      ml-auto shrink-0 whitespace-nowrap
+      text-[10px] font-extrabold
+      text-emerald-600
+      sm:text-[12px]
+    "
                         >
-                          <p
-                            className="
-          text-sm font-extrabold tracking-tight
-          text-emerald-600
-          sm:text-base
-        "
-                          >
-                            +
-                            {formatMoney(Math.abs(signedAmount))}
-                          </p>
-
-                          <p className="mt-0.5 text-[9px] font-medium uppercase tracking-wide text-slate-400">
-                            Amount
-                          </p>
-                        </div>
+                          +{formatMoney(Math.abs(signedAmount))}
+                        </span>
                       </div>
                     ) : (
                       /* --------------------------------
@@ -13929,17 +14278,26 @@ function HistoryCategory({
       </div>
 
       {/* Amount */}
-      <div className="relative mt-3 border-t border-slate-100/80 pt-2.5">
-        <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">
+      <div
+        className="
+    relative mt-3
+    flex items-center justify-between
+    gap-3
+    border-t border-slate-100/80
+    pt-2.5
+  "
+      >
+        <p className="whitespace-nowrap text-[10px] font-semibold uppercase tracking-wide text-slate-400">
           Total Sales
         </p>
 
         <p
           className={`
-            mt-0.5 text-lg font-extrabold
-            tracking-tight
-            ${styles.amount}
-          `}
+      whitespace-nowrap
+      text-lg font-extrabold
+      tracking-tight
+      ${styles.amount}
+    `}
         >
           {formatMoney(amount)}
         </p>
